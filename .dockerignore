@@ -1,0 +1,10 @@
+.env
+.git
+*.db
+*.sqlite
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+linkedin_preview*.html

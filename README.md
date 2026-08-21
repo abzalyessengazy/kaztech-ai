@@ -104,6 +104,28 @@ python -m analytics.tracker     # theme-report + вкус главреда
 python scheduler.py             # держать расписание
 ```
 
+## Production
+
+Recommended MVP mode while LinkedIn Page API access is pending:
+
+```env
+DRY_RUN=0
+LINKEDIN_ENABLED=0
+TELEGRAM_CHANNEL_ENABLED=1
+SCOUT_MAX_ITEMS=8
+MODEL_EDITOR=claude-sonnet-5
+```
+
+Run as an always-on worker:
+
+```bash
+python scheduler.py
+```
+
+Container hosts can use the included `Dockerfile`; the container starts `scheduler.py`.
+Set secrets in the host dashboard, not in git. Keep a persistent disk/volume if you want
+`kaztech.db` history to survive deploys and restarts.
+
 ## Как обучается вкус
 
 Кнопки Telegram пишут сигналы в `taste_feedback`. Нажал 🔥 Spicier 20 раз —
