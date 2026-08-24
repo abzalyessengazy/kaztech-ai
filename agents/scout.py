@@ -7,6 +7,7 @@
 """
 import html
 import re
+import socket
 import feedparser
 import requests
 
@@ -37,7 +38,13 @@ def _item(url, title, summary, src, published=""):
 
 
 def _from_rss(src: dict) -> list[dict]:
-    feed = feedparser.parse(src["url"], request_headers=HEADERS)
+    # feedparser has no timeout arg and can hang forever on an unresponsive host.
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(TIMEOUT)
+    try:
+        feed = feedparser.parse(src["url"], request_headers=HEADERS)
+    finally:
+        socket.setdefaulttimeout(old_timeout)
     items = []
     for e in feed.entries[:15]:
         link, title = e.get("link"), e.get("title", "").strip()
