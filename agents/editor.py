@@ -6,7 +6,8 @@
   · RECENT  — недавние темы (чтобы не повторяться);
   · TASTE   — накопленный вкус главреда из кнопок Telegram.
 
-Поддерживает модификаторы (spicier / more_kazakh / less_satire / regenerate) —
+Поддерживает модификаторы (spicier / more_kazakh / less_satire / regenerate)
+и произвольную ручную инструкцию главреда (кнопка Edit в Telegram) —
 так главред обучает редактора вкусу, не написав ни одного промпта.
 """
 import json
@@ -28,7 +29,7 @@ USER_TEMPLATE = """Бүгінгі басты история:
     "title": "табиғи қазақша қысқа тақырып, орысша калькасыз, эмодзисіз",
     "body": "POST ҚҰРЫЛЫМЫН сақта: 3-4 қысқа абзац, ~90-140 сөз, табиғи қазақша, орысша сөйлем/тіркес қоспа",
   "image_prompt": "Visual Agent үшін ағылшынша сурет идеясы",
-    "satire_note": "сатираның қазақша қысқа түсіндірмесі (главред үшін)",
+    "satire_note": "таңдалған тон режимі (straight/lightly ironic/full satire) және неге, 1 қысқа сөйлеммен",
     "cta": "LinkedIn-ге лайық қазақша 1 қысқа сұрақ; түйме/сілтеме туралы айтпа",
   "theme": "{theme}"
 }}
@@ -67,11 +68,14 @@ def _system() -> str:
     )
 
 
-def run(story: dict, modifier: str | None = None) -> dict:
-    """story — строка news (dict). modifier — ключ из MODIFIER_DIRECTIVES."""
+def run(story: dict, modifier: str | None = None, custom_instruction: str | None = None) -> dict:
+    """story — строка news (dict). modifier — ключ из MODIFIER_DIRECTIVES.
+    custom_instruction — свободный текст главреда (кнопка Edit в Telegram)."""
     mod_line = ""
     if modifier and modifier in style_guide.MODIFIER_DIRECTIVES:
         mod_line = "\nМАҢЫЗДЫ ТҮЗЕТУ: " + style_guide.MODIFIER_DIRECTIVES[modifier]
+    if custom_instruction:
+        mod_line += f"\nГЛАВРЕДТІҢ НАҚТЫ СҰРАНЫСЫ (міндетті түрде орында): {custom_instruction}"
 
     user = USER_TEMPLATE.format(
         title=story.get("original_title") or story.get("title", ""),
@@ -80,15 +84,27 @@ def run(story: dict, modifier: str | None = None) -> dict:
         theme=story.get("theme", ""),
         modifier=mod_line,
     )
-    post = llm.call_json(_system(), user, model=settings.MODEL_EDITOR, max_tokens=2400)
-    post = _polish_post(post)
+
+    # A truncated/short LLM response can otherwise silently ship a post with
+    # a title but no body — retry a couple of times before accepting it.
+    post = None
+    candidate = {}
+    for attempt in range(3):
+        candidate = llm.call_json(_system(), user, model=settings.MODEL_EDITOR, max_tokens=2400)
+        candidate = _polish_post(candidate)
+        if len((candidate.get("body") or "").strip()) >= 40 and (candidate.get("title") or "").strip():
+            post = candidate
+            break
+        print(f"[editor] бос/тым қысқа нәтиже (попытка {attempt + 1}/3), қайта сұраймыз...")
+    post = post or candidate
+
     post["news_id"] = story["id"]
     post["source_name"] = story.get("source_name", "")
     post["source_url"] = story.get("source_url", "")
     post.setdefault("theme", story.get("theme", ""))
     for k in ("title", "body", "image_prompt", "satire_note", "cta"):
         post.setdefault(k, "")
-    tag = f" ({modifier})" if modifier else ""
+    tag = f" ({modifier})" if modifier else (" (custom edit)" if custom_instruction else "")
     print(f"[editor]{tag} пост готов: {post['title'][:55]}")
     return post
 

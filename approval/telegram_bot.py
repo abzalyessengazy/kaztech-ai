@@ -4,13 +4,15 @@
 Кнопки не просто Publish/Reject, а инструменты вкуса:
 
   ✅ Publish   ✏️ Regenerate   🔥 Spicier
-  🇰🇿 More KZ  📰 Less satire  ❌ Reject
+  🇰🇿 More KZ  📰 Less satire  📝 Edit  ❌ Reject
 
 Модификаторы перегенерируют пост на месте (editMessageText) и логируют
 сигнал в taste_feedback → редактор учится вкусу главреда без промптов.
+Edit ждёт свободный текст-ответ главреда и передаёт его редактору как
+точную инструкцию — быстрая правка без Reject/Regenerate.
 
 Голый Bot API, без внешних SDK. review() ведёт весь интерактив и
-возвращает финальный статус.
+возвращает финальный статус: 'published' | 'rejected' | 'timeout'.
 """
 import time
 import requests
@@ -27,7 +29,8 @@ BUTTONS = [
     [{"text": "🔥 Spicier", "callback_data": "spicier"},
      {"text": "🇰🇿 More KZ", "callback_data": "more_kazakh"},
      {"text": "📰 Less satire", "callback_data": "less_satire"}],
-    [{"text": "❌ Reject", "callback_data": "reject"}],
+    [{"text": "📝 Edit", "callback_data": "edit"},
+     {"text": "❌ Reject", "callback_data": "reject"}],
 ]
 MODIFIERS = {"regenerate", "spicier", "more_kazakh", "less_satire"}
 MAX_CARD_CHARS = 3900
@@ -58,6 +61,13 @@ def _answer_callback(callback_id: str, text: str) -> None:
         _api("answerCallbackQuery", callback_query_id=callback_id, text=text)
     except requests.HTTPError:
         pass
+
+
+def _is_authorized_callback(callback: dict) -> bool:
+    allowed = str(settings.TELEGRAM_CHAT_ID)
+    message_chat = str(callback.get("message", {}).get("chat", {}).get("id", ""))
+    user_id = str(callback.get("from", {}).get("id", ""))
+    return allowed in {message_chat, user_id}
 
 
 def _story_summary(story: dict) -> str:
@@ -111,6 +121,24 @@ def _notify(text):
         pass
 
 
+def _await_edit_instruction(offset: int | None, timeout_seconds: int = 600):
+    """After the Edit button, wait for the chief editor's free-text reply.
+    Returns (instruction_text_or_None, updated_offset)."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        updates = _api("getUpdates", offset=offset, timeout=5).get("result", [])
+        for upd in updates:
+            offset = upd["update_id"] + 1
+            message = upd.get("message")
+            if not message or not message.get("text"):
+                continue
+            if str(message.get("chat", {}).get("id", "")) != str(settings.TELEGRAM_CHAT_ID):
+                continue
+            return message["text"].strip(), offset
+        time.sleep(2)
+    return None, offset
+
+
 def review(story: dict, post: dict, post_id: int, timeout_minutes: int = 30) -> str:
     """
     Интерактивный цикл: показывает карточку, обрабатывает модификаторы
@@ -132,20 +160,41 @@ def review(story: dict, post: dict, post_id: int, timeout_minutes: int = 30) -> 
             if not cb:
                 continue
             signal = cb["data"]
+            if not _is_authorized_callback(cb):
+                _answer_callback(cb["id"], "Unauthorized")
+                continue
             _answer_callback(cb["id"], f"⏳ {signal}…")
-            db.log_feedback(signal, post_id)
 
             if signal == "publish":
+                db.log_feedback(signal, post_id)
                 db.set_approval(post_id, 1)
                 urn = publisher.publish_post(post_id)
                 channel_message_id = telegram_channel.publish_post(post_id)
                 _notify(f"✅ Жарияланды (post {post_id}). LinkedIn: {urn}. Telegram: {channel_message_id}")
                 return "published"
             if signal == "reject":
+                db.log_feedback(signal, post_id)
                 db.set_approval(post_id, -1)
                 _notify(f"❌ Қабылданбады (post {post_id}).")
                 return "rejected"
+            if signal == "edit":
+                _api("sendMessage", chat_id=settings.TELEGRAM_CHAT_ID,
+                     text="Постта нақты не өзгерту керек? Жауап ретінде жазыңыз "
+                          "(мыс.: «CTA-ны алып таста», «екінші абзацты қысқарт»).",
+                     reply_markup={"force_reply": True})
+                instruction, offset = _await_edit_instruction(offset)
+                if instruction:
+                    db.log_feedback("edit", post_id)
+                    post = editor.run(story, custom_instruction=instruction)
+                    post = visual.run(post)
+                    db.update_post_body(post_id, post)
+                    regen += 1
+                    _edit(message_id, story, post, score, regen)
+                else:
+                    _notify("⏳ Түзету жауабы келмеді, карточка сол күйінде қалады.")
+                continue
             if signal in MODIFIERS:
+                db.log_feedback(signal, post_id)
                 post = editor.run(story, modifier=signal)
                 post = visual.run(post)
                 db.update_post_body(post_id, post)
