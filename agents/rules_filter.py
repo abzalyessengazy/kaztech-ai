@@ -10,11 +10,17 @@
     inbox → candidate  (прошло)
     inbox → dropped    (мусор/дубль)
 """
+import re
+
 from config import sources
 from core import db
 
 MAX_CANDIDATES = 20
 USED_DUPLICATE_THRESHOLD = 0.55
+
+# Границы слова — чтобы короткие/частые хинты (напр. "kaspi") не ловили
+# случайные совпадения внутри других слов.
+_LOCAL_HINT_RE = [re.compile(r"\b" + re.escape(h) + r"\b") for h in sources.KAZAKH_RELEVANCE_HINTS]
 
 
 def _is_junk(title: str) -> bool:
@@ -26,7 +32,7 @@ def _is_local(item: dict) -> bool:
     if item.get("is_local"):
         return True
     blob = f"{item['original_title']} {item.get('original_summary','')}".lower()
-    return any(h in blob for h in sources.KAZAKH_RELEVANCE_HINTS)
+    return any(p.search(blob) for p in _LOCAL_HINT_RE)
 
 
 def _jaccard(a: set, b: set) -> float:
@@ -81,7 +87,9 @@ def run() -> dict:
         if dup_of:
             if item.get("source_weight", 1) > dup_of["item"].get("source_weight", 1):
                 db.set_status(dup_of["item"]["id"], "dropped")
+                local = _is_local(item)
                 dup_of["item"], dup_of["tokens"] = item, tokens
+                dup_of["local"], dup_of["score"] = local, _cheap_score(item, local)
             else:
                 db.set_status(item["id"], "dropped")
             continue

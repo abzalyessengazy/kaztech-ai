@@ -13,6 +13,8 @@ def _get(key: str, default: str = "") -> str:
 ANTHROPIC_API_KEY = _get("ANTHROPIC_API_KEY")
 MODEL_RANKER = _get("MODEL_RANKER", "claude-sonnet-5")
 MODEL_EDITOR = _get("MODEL_EDITOR", "claude-opus-4-8")
+# Арзан тіл сапасы QA өткізгіш (polish.py) — editor-ден кейінгі жеңіл түзету.
+MODEL_CHECKER = _get("MODEL_CHECKER", "claude-haiku-4-5-20251001")
 
 # Telegram
 TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN")

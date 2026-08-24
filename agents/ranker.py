@@ -12,6 +12,7 @@ Feedback loop: ранкеру передаётся theme_engagement() — как
 editorial intelligence (Kazakhstan relevance = очень ценно, generic AI = слабо).
 """
 import json
+import re
 
 from config import settings, sources
 from core import db, llm
@@ -67,16 +68,32 @@ def _score_batch(candidates: list[dict]) -> list[dict]:
     try:
         return json.loads(resp)
     except json.JSONDecodeError:
-        import re
-        m = re.search(r"\[.*\]", resp, flags=re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
-        print(f"[rank] ⚠️ batch scoring JSON парсинг сәтсіз (ұзындығы {len(resp)} белгі, "
-              f"соңы: ...{resp[-120:]!r}) — 0 кандидат бағаланды.")
-        return []
+        pass
+
+    m = re.search(r"\[.*\]", resp, flags=re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Бір объект бүлінген болса (мыс. моделдің кездейсоқ типо-глитчі), бүкіл
+    # batch-ты тастамай, объект бойынша жеке парстаймыз — жарамдылары
+    # сақталады, тек бүлінгені ғана жоғалады.
+    salvaged = []
+    for obj in re.finditer(r"\{[^{}]*\}", resp):
+        try:
+            salvaged.append(json.loads(obj.group(0)))
+        except json.JSONDecodeError:
+            continue
+    if salvaged:
+        print(f"[rank] ⚠️ batch JSON ішінара бүлінген — {len(salvaged)} объект сақталды "
+              f"(жалпы ұзындық {len(resp)} белгі).")
+        return salvaged
+
+    print(f"[rank] ⚠️ batch scoring JSON парсинг сәтсіз (ұзындығы {len(resp)} белгі, "
+          f"соңы: ...{resp[-120:]!r}) — 0 кандидат бағаланды.")
+    return []
 
 
 JUDGE_SYSTEM = """Сен — бас редактордың орынбасарысың. Финалистерден БІР ғана
@@ -106,15 +123,26 @@ def run():
     # Ступень 1 — batch scoring.
     by_id = {c["id"]: c for c in candidates}
     scored = _score_batch(candidates)
+    scored_ids = set()
     for s in scored:
         cid = int(s.get("id", -1))
         if cid not in by_id:
             continue
+        scored_ids.add(cid)
         for k in WEIGHTS:
             s[k] = float(s.get(k, 0))
         s["editorial"] = _editorial(s, by_id[cid].get("source_weight", 1.0))
         db.save_ranking(cid, s)
     print(f"[rank] оценено {len(scored)} кандидатов (1 batch-вызов)")
+
+    # LLM-нен өткен жоқ (парсинг сәтсіз болғандар) — 'candidate' күйінде
+    # мәңгі қалып, әр келесі ranker.run() шақыруында қайта-қайта жіберілмесін.
+    missed = set(by_id) - scored_ids
+    if missed:
+        for cid in missed:
+            db.set_status(cid, "dropped")
+        print(f"[rank] LLM пропустил {len(missed)} кандидатов — помечены dropped "
+              "(иначе зависли бы в 'candidate' навсегда)")
 
     # Ступень 2 — editorial judge среди финалистов.
     finalists = db.get_finalists(N_FINALISTS, settings.MIN_EDITORIAL_SCORE)

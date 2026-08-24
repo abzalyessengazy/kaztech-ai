@@ -16,7 +16,7 @@ import sys
 
 from config import settings
 from core import db
-from agents import scout, rules_filter, ranker, editor, visual, publisher
+from agents import scout, rules_filter, ranker, editor, visual, publisher, telegram_channel
 from approval import telegram_bot
 
 
@@ -55,7 +55,8 @@ def run_daily(auto_publish: bool = False):
             print("[orchestrator] AUTO — без ручного аппрува")
             db.set_approval(post_id, 1)
             urn = publisher.publish_post(post_id)
-            if urn:
+            channel_message_id = telegram_channel.publish_post(post_id)
+            if urn or channel_message_id:
                 db.set_status(story["id"], "published")
             break
 

@@ -16,6 +16,7 @@ import re
 from config import settings
 from config import style_guide
 from core import llm, db
+from agents import polish
 
 USER_TEMPLATE = """Бүгінгі басты история:
 
@@ -104,6 +105,7 @@ def run(story: dict, modifier: str | None = None, custom_instruction: str | None
     post.setdefault("theme", story.get("theme", ""))
     for k in ("title", "body", "image_prompt", "satire_note", "cta"):
         post.setdefault(k, "")
+    post = polish.run(post)          # арзан Kazakh QA — калька фикс
     tag = f" ({modifier})" if modifier else (" (custom edit)" if custom_instruction else "")
     print(f"[editor]{tag} пост готов: {post['title'][:55]}")
     return post
