@@ -45,7 +45,8 @@ SCORE_SYSTEM = f"""Сен — қазақстандық AI/Tech ньюсрумн�
 {{"id": <id>, "importance":0-10, "novelty":0-10, "kz_relevance":0-10,
  "ai_relevance":0-10, "virality":0-10, "satire_potential":0-10,
  "theme":"қысқа тег: kz-local|startup|new-model|business-impact|ai-tooling|research|culture",
- "reason":"1 сөйлем"}}"""
+ "reason":"қысқа себеп, макс 10 сөз"}}
+Маңызды: "reason" өрісін қысқа ұста (10 сөзден аспасын) — JSON толық аяқталуы керек, кесілмеу керек."""
 
 
 def _score_batch(candidates: list[dict]) -> list[dict]:
@@ -55,9 +56,12 @@ def _score_batch(candidates: list[dict]) -> list[dict]:
         for c in candidates
     )
     user = f"{_theme_hint()}\n\nКандидаттар:\n{listing}"
+    # ~180 tokens/candidate is a safe ceiling for id+scores+short reason; floor at 4000
+    # so a truncated response (and a silent empty-list fallback) doesn't happen.
+    max_tokens = max(4000, len(candidates) * 180)
     resp = llm.call_text(
         SCORE_SYSTEM + "\n\nТек JSON массив қайтар.", user,
-        model=settings.MODEL_RANKER, max_tokens=2000, temperature=0.2,
+        model=settings.MODEL_RANKER, max_tokens=max_tokens, temperature=0.2,
     )
     resp = resp.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     try:
@@ -65,7 +69,14 @@ def _score_batch(candidates: list[dict]) -> list[dict]:
     except json.JSONDecodeError:
         import re
         m = re.search(r"\[.*\]", resp, flags=re.DOTALL)
-        return json.loads(m.group(0)) if m else []
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+        print(f"[rank] ⚠️ batch scoring JSON парсинг сәтсіз (ұзындығы {len(resp)} белгі, "
+              f"соңы: ...{resp[-120:]!r}) — 0 кандидат бағаланды.")
+        return []
 
 
 JUDGE_SYSTEM = """Сен — бас редактордың орынбасарысың. Финалистерден БІР ғана
