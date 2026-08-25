@@ -161,6 +161,28 @@ class TelegramChannelTests(unittest.TestCase):
             os.unlink(handle.name)
 
 
+class ChooseStoryCardTests(unittest.TestCase):
+    def test_pick_card_lists_all_finalists_with_reason(self):
+        finalists = [
+            {"original_title": "Story A", "theme": "kz-local", "editorial": 8.1, "rank_reason": "Local impact"},
+            {"original_title": "Story B", "theme": "ai-tooling", "editorial": 7.5, "rank_reason": "New model"},
+        ]
+        card = telegram_bot._pick_card(finalists)
+
+        self.assertIn("1️⃣", card)
+        self.assertIn("2️⃣", card)
+        self.assertIn("Story A", card)
+        self.assertIn("Story B", card)
+        self.assertIn("Local impact", card)
+
+    def test_pick_buttons_have_one_callback_per_story_plus_skip(self):
+        buttons = telegram_bot._pick_buttons(3)
+
+        pick_row = buttons[0]
+        self.assertEqual([b["callback_data"] for b in pick_row], ["pick_0", "pick_1", "pick_2"])
+        self.assertEqual(buttons[1][0]["callback_data"], "skip")
+
+
 class TelegramCardTests(unittest.TestCase):
     def test_card_contains_short_story_summary_and_post(self):
         card = telegram_bot._card(

@@ -1,7 +1,11 @@
 """
 👨‍💼 TELEGRAM EDITOR-IN-CHIEF — обучаемый аппрув.
 
-Кнопки не просто Publish/Reject, а инструменты вкуса:
+Два интерактивных шага:
+
+  choose_story()  — ranker присылает топ-5 финалистов, главред выбирает
+                     ОДИН номерной кнопкой (или ⏭ пропускает день).
+  review()        — выбранная история проходит обычный цикл кнопок:
 
   ✅ Publish   ✏️ Regenerate   🔥 Spicier
   🇰🇿 More KZ  📰 Less satire  📝 Edit  ❌ Reject
@@ -9,10 +13,11 @@
 Модификаторы перегенерируют пост на месте (editMessageText) и логируют
 сигнал в taste_feedback → редактор учится вкусу главреда без промптов.
 Edit ждёт свободный текст-ответ главреда и передаёт его редактору как
-точную инструкцию — быстрая правка без Reject/Regenerate.
+точную инструкцию — быстрая правка без Reject/Regenerate. Reject в
+review() не выбирает следующего финалиста автоматически — оркестратор
+снова зовёт choose_story() с оставшимися вариантами.
 
-Голый Bot API, без внешних SDK. review() ведёт весь интерактив и
-возвращает финальный статус: 'published' | 'rejected' | 'timeout'.
+Голый Bot API, без внешних SDK.
 """
 import time
 import requests
@@ -119,6 +124,68 @@ def _notify(text):
         _api("sendMessage", chat_id=settings.TELEGRAM_CHAT_ID, text=text)
     except Exception:
         pass
+
+
+NUMBER_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
+
+
+def _pick_card(finalists: list[dict]) -> str:
+    lines = ["🗞 БҮГІНГІ ТОП — қайсысын дайындайық?\n"]
+    for i, f in enumerate(finalists):
+        num = NUMBER_EMOJI[i] if i < len(NUMBER_EMOJI) else f"{i + 1}."
+        title = f.get("original_title", "")
+        reason = f.get("rank_reason", "")
+        lines.append(f"{num} [{f.get('editorial', 0)}] {f.get('theme', '')} — {title}")
+        if reason:
+            lines.append(f"    💭 {reason}")
+        lines.append("")
+    return _trim("\n".join(lines), MAX_CARD_CHARS)
+
+
+def _pick_buttons(n: int) -> list[list[dict]]:
+    row = [{"text": NUMBER_EMOJI[i] if i < len(NUMBER_EMOJI) else str(i + 1),
+            "callback_data": f"pick_{i}"} for i in range(n)]
+    return [row, [{"text": "⏭ Бүгін өткіземіз", "callback_data": "skip"}]]
+
+
+def choose_story(finalists: list[dict], timeout_minutes: int = 30) -> dict | None:
+    """
+    Топ-N финалисты кнығатпен көрсетеді, главред біреуін таңдайды.
+    Возвращает таңдалған историяны (dict) немесе None (⏭ skip / timeout).
+    """
+    offset = _next_update_offset()
+    sent = _api("sendMessage", chat_id=settings.TELEGRAM_CHAT_ID,
+                text=_pick_card(finalists),
+                reply_markup={"inline_keyboard": _pick_buttons(len(finalists))})
+    message_id = sent["result"]["message_id"]
+
+    deadline = time.time() + timeout_minutes * 60
+    while time.time() < deadline:
+        updates = _api("getUpdates", offset=offset, timeout=5).get("result", [])
+        for upd in updates:
+            offset = upd["update_id"] + 1
+            cb = upd.get("callback_query")
+            if not cb:
+                continue
+            if not _is_authorized_callback(cb):
+                _answer_callback(cb["id"], "Unauthorized")
+                continue
+            if cb.get("message", {}).get("message_id") != message_id:
+                _answer_callback(cb["id"], "⚠️ Бұл ескі карточка, өткізілді.")
+                continue
+            data = cb["data"]
+            if data == "skip":
+                _answer_callback(cb["id"], "⏭ Өткіздік")
+                return None
+            if data.startswith("pick_"):
+                idx = int(data.split("_", 1)[1])
+                if 0 <= idx < len(finalists):
+                    _answer_callback(cb["id"], f"✅ {idx + 1}-ші таңдалды")
+                    return finalists[idx]
+        time.sleep(3)
+
+    _notify("⏳ Таңдау уақыты бітті — бүгін өткіземіз.")
+    return None
 
 
 def _await_edit_instruction(offset: int | None, timeout_seconds: int = 600):

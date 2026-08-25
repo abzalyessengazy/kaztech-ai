@@ -3,9 +3,10 @@
 
     ~20 кандидатов
          ↓  batch LLM scoring (один вызов, дёшево)
-    5 финалистов
-         ↓  editorial judge (один вызов)
-    1 история дня  + theme
+    топ-5 финалистов  ← возвращается главреду для ручного выбора
+
+Финального «победителя» не выбирает LLM-judge — теперь это делает
+главред в Telegram (см. approval.telegram_bot.choose_story).
 
 Feedback loop: ранкеру передаётся theme_engagement() — какие темы уже
 дают вовлечённость. Через 100–200 постов появляется собственная
@@ -96,21 +97,8 @@ def _score_batch(candidates: list[dict]) -> list[dict]:
     return []
 
 
-JUDGE_SYSTEM = """Сен — бас редактордың орынбасарысың. Финалистерден БІР ғана
-бүгінгі басты история таңда. Критерий: қазақстандық аудиторияға құндылық,
-бизнес-әсер, сатира әлеуеті, жаңалық. Тек JSON: {"winner_id": <id>, "theme": "тег", "why": "1-2 сөйлем"}"""
-
-
-def _judge(finalists: list[dict]) -> dict:
-    listing = "\n".join(
-        f'id={f["id"]} | score={f["editorial"]} | theme={f["theme"]} | {f["original_title"]} | {f["rank_reason"]}'
-        for f in finalists
-    )
-    return llm.call_json(JUDGE_SYSTEM, listing, model=settings.MODEL_EDITOR, max_tokens=400)
-
-
 def run():
-    """Возвращает выбранную историю (dict) или None."""
+    """Возвращает топ-N финалистов (list[dict], отсортирован по editorial score) или None."""
     used_tokens = rules_filter._used_tokens()
     candidates = [
         c for c in db.get_candidates(limit=settings.SCOUT_MAX_ITEMS)
@@ -144,7 +132,7 @@ def run():
         print(f"[rank] LLM пропустил {len(missed)} кандидатов — помечены dropped "
               "(иначе зависли бы в 'candidate' навсегда)")
 
-    # Ступень 2 — editorial judge среди финалистов.
+    # Ступень 2 — топ-N финалистов (выбор из них теперь делает главред).
     finalists = db.get_finalists(N_FINALISTS, settings.MIN_EDITORIAL_SCORE)
     if not finalists:
         print(f"[rank] нет финалистов выше порога {settings.MIN_EDITORIAL_SCORE}.")
@@ -155,17 +143,7 @@ def run():
     for f in finalists:
         print(f"   {f['editorial']:>4}  [{f['theme']}]  {f['original_title'][:55]}")
 
-    verdict = _judge(finalists)
-    winner = db.get_news(int(verdict.get("winner_id", finalists[0]["id"])))
-    if not winner:
-        winner = finalists[0]
-    if verdict.get("theme"):
-        winner["theme"] = verdict["theme"]
-    winner["selection_reason"] = verdict.get("why", "")
-    db.set_status(winner["id"], "chosen")
-    print(f"[rank] 🏆 история дня: {winner['original_title'][:60]}")
-    print(f"       почему: {verdict.get('why','')}")
-    return winner
+    return finalists
 
 
 if __name__ == "__main__":

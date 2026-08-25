@@ -1,16 +1,18 @@
 """
 Оркестратор ньюсрума.
 
-    scout → rules_filter → ranker(batch + judge) → editor(memory+taste)
+    scout → rules_filter → ranker(batch scoring, топ-5)
+          → Telegram: главред таңдайды 1-уін → editor(memory+taste)
           → visual → Telegram editor-in-chief → publisher → analytics
 
-AI newsroom каждый день ищет, проверяет, выбирает и готовит ОДНУ историю.
-Главред утверждает (или система публикует автономно в --auto). Если главред
-явно жалт («Reject»), келесі үздік финалист автоматты түрде ұсынылады.
-Ойланбай қалдырса («timeout»), бұл reject деп есептелмейді — цикл сол жерде
-тоқтайды, история "rejected" емес "timeout" деп белгіленеді.
+AI newsroom каждый день ищет, проверяет и готовит топ-5 финалистов.
+Главред таңдайды біреуін Telegram-да (немесе --auto режимінде жүйе ең
+жоғары score-ты автоматты алады). Таңдалған история әдеттегі
+Publish/Regenerate/Edit/Reject циклінен өтеді. Reject болса — қалған
+финалисттерден главред қайта таңдайды (автоматты «келесі үздік» жоқ).
+Ойланбай қалдырса («timeout»), бұл reject деп есептелмейді.
 
-Флаги: --auto (без аппрува), --dry (ничего не публикует).
+Флаги: --auto (без аппрува, ең жоғары score автоматты), --dry (ничего не публикует).
 """
 import sys
 
@@ -18,16 +20,6 @@ from config import settings
 from core import db
 from agents import scout, rules_filter, ranker, editor, visual, publisher, telegram_channel
 from approval import telegram_bot
-
-
-def _next_finalist(exclude_ids: list[int]):
-    """Следующий по editorial score финалист, ещё не предложенный сегодня."""
-    placeholders = ",".join("?" for _ in exclude_ids) or "0"
-    query = (f"SELECT * FROM news WHERE status='finalist' AND id NOT IN ({placeholders}) "
-             "ORDER BY editorial DESC LIMIT 1")
-    with db.connect() as conn:
-        row = conn.execute(query, exclude_ids).fetchone()
-        return dict(row) if row else None
 
 
 def run_daily(auto_publish: bool = False):
@@ -38,20 +30,29 @@ def run_daily(auto_publish: bool = False):
 
     scout.run()                      # 1. что произошло (global + KZ)
     rules_filter.run()               # 2. дешёвый фильтр: ~20 кандидатов
-    story = ranker.run()             # 3. batch scoring + editorial judge → 1 история
-    if not story:
-        print("[orchestrator] нет истории выше порога. Сегодня пропускаем "
+    finalists = ranker.run()         # 3. batch scoring → топ-5 финалистов
+    if not finalists:
+        print("[orchestrator] нет финалистов выше порога. Сегодня пропускаем "
               "(это норма — не RSS-помойка).")
         return
+
+    if auto_publish:
+        story = finalists[0]         # ең жоғары editorial score — judge жоқ
+    else:
+        story = telegram_bot.choose_story(finalists)   # 4. главред таңдайды
+        if not story:
+            print("[orchestrator] главред таңдамады — бүгін өткіздік.")
+            return
+    db.set_status(story["id"], "chosen")
 
     tried_ids: list[int] = []
     while story:
         tried_ids.append(story["id"])
-        post = editor.run(story)         # 4. казахский пост + сатира (память+вкус)
-        post = visual.run(post)          # 5. фирменный визуал
-        post_id = db.save_post(post)     # 6. сохранить
+        post = editor.run(story)         # 5. казахский пост + сатира (память+вкус)
+        post = visual.run(post)          # 6. фирменный визуал
+        post_id = db.save_post(post)     # 7. сохранить
 
-        if auto_publish:                 # 7a. автономная публикация
+        if auto_publish:                 # 8a. автономная публикация
             print("[orchestrator] AUTO — без ручного аппрува")
             db.set_approval(post_id, 1)
             urn = publisher.publish_post(post_id)
@@ -60,7 +61,7 @@ def run_daily(auto_publish: bool = False):
                 db.set_status(story["id"], "published")
             break
 
-        result = telegram_bot.review(story, post, post_id)  # 7b. интерактивный аппрув
+        result = telegram_bot.review(story, post, post_id)  # 8b. интерактивный аппрув
         if result == "published":
             db.set_status(story["id"], "published")
             break
@@ -69,14 +70,18 @@ def run_daily(auto_publish: bool = False):
             db.set_status(story["id"], "timeout")
             break
 
-        # Нақты Reject — келесі үздік финалистті ұсынамыз.
+        # Нақты Reject — қалған финалисттерден главред қайта таңдайды.
         db.set_status(story["id"], "rejected")
-        story = _next_finalist(tried_ids)
-        if story:
-            print(f"[orchestrator] қабылданбады — келесі үздік ұсынылады: "
-                  f"{story['original_title'][:60]}")
-        else:
+        remaining = [f for f in finalists if f["id"] not in tried_ids]
+        if not remaining:
             print("[orchestrator] қабылданбады — бүгінге басқа финалист жоқ.")
+            break
+        story = telegram_bot.choose_story(remaining)
+        if story:
+            db.set_status(story["id"], "chosen")
+            print(f"[orchestrator] жаңа тарих таңдалды: {story['original_title'][:60]}")
+        else:
+            print("[orchestrator] жаңа тарих таңдалмады — бүгін өткіздік.")
 
     print("[orchestrator] цикл завершён.")
 
