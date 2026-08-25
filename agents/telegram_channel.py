@@ -143,5 +143,6 @@ def publish_post(post_id: int) -> int | None:
         body = _send_message(_trim(text))
 
     message_id = body["result"]["message_id"]
+    db.mark_published(post_id, f"tg:{settings.TELEGRAM_CHANNEL_ID}:{message_id}")
     print(f"[telegram_channel] отправлено в канал: message_id={message_id}")
     return message_id
