@@ -226,10 +226,14 @@ def review(story: dict, post: dict, post_id: int, timeout_minutes: int = 30) -> 
             cb = upd.get("callback_query")
             if not cb:
                 continue
-            signal = cb["data"]
             if not _is_authorized_callback(cb):
                 _answer_callback(cb["id"], "Unauthorized")
                 continue
+            if cb.get("message", {}).get("message_id") != message_id:
+                # Ескі/басқа карточкадағы клик — ағымдағы посттарге қолданылмасын.
+                _answer_callback(cb["id"], "⚠️ Бұл ескі карточка, өткізілді.")
+                continue
+            signal = cb["data"]
             _answer_callback(cb["id"], f"⏳ {signal}…")
 
             if signal == "publish":
