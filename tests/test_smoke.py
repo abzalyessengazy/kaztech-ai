@@ -306,16 +306,14 @@ class EditorPromptTests(unittest.TestCase):
     def test_editor_prompt_demands_clean_natural_kazakh(self):
         system = style_guide.build_editor_system_prompt()
 
-        self.assertIn("ҚАЗАҚ ТІЛІНІҢ САПАСЫ", system)
-        self.assertIn("Орысша сөйлем", system)
-        self.assertIn("табиғи қазақ", system)
-        self.assertIn("90–140 сөз", system)
+        self.assertIn("KAZAKH LANGUAGE QUALITY", system)
+        self.assertIn("Russian syntax hidden inside Kazakh vocabulary", system)
+        self.assertIn("80–250 words", system)
         self.assertIn("Түймені бас", system)
         self.assertIn("ChatGPT пе", system)
 
     def test_editor_user_template_demands_short_clean_structure(self):
-        self.assertIn("3-4 қысқа абзац", editor.USER_TEMPLATE)
-        self.assertIn("~90-140 сөз", editor.USER_TEMPLATE)
+        self.assertIn("80-250 сөз", editor.USER_TEMPLATE)
         self.assertIn("орысша сөйлем/тіркес қоспа", editor.USER_TEMPLATE)
         self.assertIn("түйме/сілтеме туралы айтпа", editor.USER_TEMPLATE)
         self.assertIn("ағылшын брендтеріне", editor.USER_TEMPLATE)

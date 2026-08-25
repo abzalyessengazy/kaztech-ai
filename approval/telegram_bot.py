@@ -98,7 +98,7 @@ def _card(story: dict, post: dict, score: float, regen: int) -> str:
         f"{_story_summary(story)}\n\n"
         f"--- ҰСЫНЫЛҒАН LINKEDIN ПОСТ ---\n"
         f"📌 {post['title']}\n\n{post['body']}\n\n"
-        f"🎯 {post['cta']}\n😏 Сатира: {post['satire_note']}"
+        f"🎯 {post['cta']}"
     )
     return _trim(card, MAX_CARD_CHARS)
 

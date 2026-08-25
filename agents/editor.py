@@ -28,9 +28,8 @@ USER_TEMPLATE = """Бүгінгі басты история:
 Осыдан қысқа, таза құрылымды LinkedIn посты жаса. Тек JSON қайтар:
 {{
     "title": "табиғи қазақша қысқа тақырып, орысша калькасыз, эмодзисіз",
-    "body": "POST ҚҰРЫЛЫМЫН сақта: 3-4 қысқа абзац, ~90-140 сөз, табиғи қазақша, орысша сөйлем/тіркес қоспа",
+    "body": "POST ҚҰРЫЛЫМЫН сақта: қысқа абзацтар, 80-250 сөз, табиғи қазақша, орысша сөйлем/тіркес қоспа",
   "image_prompt": "Visual Agent үшін ағылшынша сурет идеясы",
-    "satire_note": "таңдалған тон режимі (straight/lightly ironic/full satire) және неге, 1 қысқа сөйлеммен",
     "cta": "LinkedIn-ге лайық қазақша 1 қысқа сұрақ; түйме/сілтеме туралы айтпа",
   "theme": "{theme}"
 }}
@@ -55,10 +54,30 @@ def _polish_known_kazakh_issues(text: str) -> str:
 
 
 def _polish_post(post: dict) -> dict:
-    for key in ("title", "body", "cta", "satire_note"):
+    for key in ("title", "body", "cta"):
         if isinstance(post.get(key), str):
             post[key] = _polish_known_kazakh_issues(post[key])
     return post
+
+
+# Kazakh output should only ever contain Cyrillic + Latin (brand names,
+# tech terms) + digits/punctuation/emoji. Any CJK/Hangul/Arabic/Hebrew
+# character means the model glitched mid-generation — rare but real, and
+# a garbled foreign-script word slipping into the post is bad enough to
+# be worth a cheap regex check + retry rather than shipping it.
+_UNEXPECTED_SCRIPT_RE = re.compile(
+    "["
+    "一-鿿"  # CJK Unified Ideographs
+    "぀-ヿ"  # Hiragana + Katakana
+    "가-힯"  # Hangul syllables
+    "֐-׿"  # Hebrew
+    "؀-ۿ"  # Arabic
+    "]"
+)
+
+
+def _has_unexpected_script(post: dict) -> bool:
+    return any(_UNEXPECTED_SCRIPT_RE.search(post.get(k) or "") for k in ("title", "body", "cta"))
 
 
 def _system() -> str:
@@ -86,24 +105,27 @@ def run(story: dict, modifier: str | None = None, custom_instruction: str | None
         modifier=mod_line,
     )
 
-    # A truncated/short LLM response can otherwise silently ship a post with
-    # a title but no body — retry a couple of times before accepting it.
+    # A truncated/short LLM response, or a rare script-corruption glitch
+    # (e.g. stray CJK characters mid-word), can otherwise silently ship a
+    # broken post — retry a couple of times before accepting it.
     post = None
     candidate = {}
     for attempt in range(3):
         candidate = llm.call_json(_system(), user, model=settings.MODEL_EDITOR, max_tokens=2400)
         candidate = _polish_post(candidate)
-        if len((candidate.get("body") or "").strip()) >= 40 and (candidate.get("title") or "").strip():
+        body_ok = len((candidate.get("body") or "").strip()) >= 40 and (candidate.get("title") or "").strip()
+        if body_ok and not _has_unexpected_script(candidate):
             post = candidate
             break
-        print(f"[editor] бос/тым қысқа нәтиже (попытка {attempt + 1}/3), қайта сұраймыз...")
+        reason = "күтпеген таңбалар (script glitch)" if body_ok else "бос/тым қысқа нәтиже"
+        print(f"[editor] {reason} (попытка {attempt + 1}/3), қайта сұраймыз...")
     post = post or candidate
 
     post["news_id"] = story["id"]
     post["source_name"] = story.get("source_name", "")
     post["source_url"] = story.get("source_url", "")
     post.setdefault("theme", story.get("theme", ""))
-    for k in ("title", "body", "image_prompt", "satire_note", "cta"):
+    for k in ("title", "body", "image_prompt", "cta"):
         post.setdefault(k, "")
     post = polish.run(post)          # арзан Kazakh QA — калька фикс
     tag = f" ({modifier})" if modifier else (" (custom edit)" if custom_instruction else "")
