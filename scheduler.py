@@ -7,6 +7,7 @@
 Запуск:  python scheduler.py   (держи процесс живым: screen/tmux/systemd)
 """
 import logging
+import sys
 
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MISSED
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -14,6 +15,12 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from config import settings
 from agents import scout
 from orchestrator import run_daily
+
+# Render (and most log collectors) capture stdout as a pipe, which Python
+# block-buffers by default — print()s (including the whole 30-min Telegram
+# approval wait) wouldn't reach live logs until the buffer fills or the
+# process exits. Line-buffer instead so logs stay real-time.
+sys.stdout.reconfigure(line_buffering=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("scheduler")

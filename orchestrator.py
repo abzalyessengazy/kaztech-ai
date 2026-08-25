@@ -87,6 +87,10 @@ def run_daily(auto_publish: bool = False):
 
 
 if __name__ == "__main__":
+    # stdout to a pipe/file is block-buffered by default — prints (including
+    # the whole 30-min Telegram approval wait) wouldn't show up in logs
+    # until the buffer fills or the process exits. Line-buffer instead.
+    sys.stdout.reconfigure(line_buffering=True)
     if "--dry" in sys.argv:
         settings.DRY_RUN = True
     run_daily(auto_publish="--auto" in sys.argv)
