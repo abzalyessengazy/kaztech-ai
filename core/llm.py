@@ -13,13 +13,19 @@ _client = None
 
 
 def client():
-    """Ленивая инициализация Anthropic-клиента (SDK нужен только тут)."""
+    """Ленивая инициализация Anthropic-клиента (SDK нужен только тут).
+
+    SDK-дің default read timeout — 600с (+ автоматты retry). Telegram
+    review() циклі синхронды болғандықтан, бір LLM шақыруы 10+ минутқа
+    ілініп қалса, бүкіл аппрув сессиясы "тоқтап қалғандай" көрінеді —
+    сондықтан бөлек, қысқарақ шектеу қоямыз.
+    """
     global _client
     if _client is None:
         if not settings.ANTHROPIC_API_KEY:
             raise RuntimeError("ANTHROPIC_API_KEY не задан (см. .env).")
         from anthropic import Anthropic  # ленивый импорт
-        _client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        _client = Anthropic(api_key=settings.ANTHROPIC_API_KEY, timeout=150.0)
     return _client
 
 

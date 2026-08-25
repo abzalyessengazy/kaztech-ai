@@ -168,8 +168,13 @@ def review(story: dict, post: dict, post_id: int, timeout_minutes: int = 30) -> 
             if signal == "publish":
                 db.log_feedback(signal, post_id)
                 db.set_approval(post_id, 1)
-                urn = publisher.publish_post(post_id)
-                channel_message_id = telegram_channel.publish_post(post_id)
+                try:
+                    urn = publisher.publish_post(post_id)
+                    channel_message_id = telegram_channel.publish_post(post_id)
+                except Exception as exc:
+                    _notify(f"⚠️ Publish кезінде қате шықты (post {post_id}): {exc}\n"
+                            "Карточка сол күйінде қалады, қайта басып көріңіз.")
+                    continue
                 _notify(f"✅ Жарияланды (post {post_id}). LinkedIn: {urn}. Telegram: {channel_message_id}")
                 return "published"
             if signal == "reject":
@@ -185,8 +190,12 @@ def review(story: dict, post: dict, post_id: int, timeout_minutes: int = 30) -> 
                 instruction, offset = _await_edit_instruction(offset)
                 if instruction:
                     db.log_feedback("edit", post_id)
-                    post = editor.run(story, custom_instruction=instruction)
-                    post = visual.run(post)
+                    try:
+                        post = editor.run(story, custom_instruction=instruction)
+                        post = visual.run(post)
+                    except Exception as exc:
+                        _notify(f"⚠️ Түзету сәтсіз аяқталды: {exc}\nКарточка сол күйінде қалады.")
+                        continue
                     db.update_post_body(post_id, post)
                     regen += 1
                     _edit(message_id, story, post, score, regen)
@@ -195,8 +204,13 @@ def review(story: dict, post: dict, post_id: int, timeout_minutes: int = 30) -> 
                 continue
             if signal in MODIFIERS:
                 db.log_feedback(signal, post_id)
-                post = editor.run(story, modifier=signal)
-                post = visual.run(post)
+                try:
+                    post = editor.run(story, modifier=signal)
+                    post = visual.run(post)
+                except Exception as exc:
+                    _notify(f"⚠️ Регенерация сәтсіз аяқталды ({signal}): {exc}\n"
+                            "Карточка сол күйінде қалады, қайта басып көріңіз.")
+                    continue
                 db.update_post_body(post_id, post)
                 regen += 1
                 _edit(message_id, story, post, score, regen)
