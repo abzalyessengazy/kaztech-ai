@@ -1,7 +1,8 @@
 # 🇰🇿 Kazakh Tech Intelligence — AI-powered Kazakh editorial newsroom
 
-Это **не новостной портал**. Это редакция: AI newsroom каждый день **ищет,
-проверяет, выбирает и готовит ОДНУ историю**. Главред (человек) утверждает.
+Это **не новостной портал**. Это редакция: AI newsroom ищет, проверяет,
+ранжирует и готовит до **пяти историй на выбор**. Главред (человек) выбирает
+одну и утверждает финальный пост.
 *TechCrunch × The Onion × қазақ интернет-мәдениеті.*
 
 Роли: система = **newsroom**, ты = **editor-in-chief**.
@@ -15,9 +16,9 @@
                      │
               🛰️ SCOUT  ──────► News Inbox (источник хранится всегда)
                      │
-              🧹 RULES FILTER ─► ~20 кандидатов (без LLM: денилист, дедуп, локал-приоритет)
+              🧹 RULES FILTER ─► ~20 кандидатов (без LLM: денилист, дедуп, 50/50 local/global)
                      │
-              🧠 RANKER ───────► batch scoring → 5 финалистов → editorial judge → 1 история
+              🧠 RANKER ───────► batch scoring → до 5 финалистов → главред выбирает 1 историю
                      │              ▲ theme feedback loop
               ✍️ EDITOR ───────► KZ + сатира (+ MEMORY + вкус главреда)
                      │
@@ -35,11 +36,12 @@
 | Улучшение | Где | Зачем |
 |---|---|---|
 | **Источник всегда** | `scout`, `publisher` | доверие + защита от «AI выдумал»; в посте `🔗 Дереккөз:` |
-| **2-ступенчатый ranker** | `rules_filter` + `ranker` | не жечь LLM на «Apple выпустила эмодзи» |
+| **2-ступенчатый ranker** | `rules_filter` + `ranker` | не жечь LLM на «Apple выпустила эмодзи»; до 5 вариантов для выбора |
 | **EDITORIAL MEMORY** | `db.successful_posts` → `editor` | стиль обучается на том, что зашло (2-й moat) |
 | **Feedback loop** | `db.theme_engagement` → `ranker` | ранкер понимает: 🇰🇿+AI ценно, generic AI слабо |
 | **Богатые кнопки** | `telegram_bot` | обучаешь вкусу без единого промпта |
-| **KZ desk** | `config/sources.py` | локальные истории — эксклюзив и differentiation |
+| **Баланс источников** | `rules_filter`, `sources.py` | 10 local + 10 global мест; Anthropic/Claude через Google News RSS |
+| **3-дневное окно** | `core/db.py` | хорошие, но невыбранные истории могут вернуться, но устаревшие не копятся |
 | **Newsroom-фрейминг** | везде | «редакция готовит историю», а не «AI пишет новости» |
 
 ## Структура
@@ -55,16 +57,16 @@ core/
 agents/
   scout.py           сбор (global + KZ), хранит источник
   rules_filter.py    дешёвая ступень 0 (без LLM)
-  ranker.py          batch scoring + editorial judge
+       ranker.py          batch scoring + до 5 финалистов для выбора главредом
   editor.py          KZ + сатира + память + вкус + модификаторы
   visual.py          промпт визуала (+хук генерации)
   publisher.py       LinkedIn + строка источника
 approval/
-  telegram_bot.py    editor-in-chief: 6 кнопок, регенерация на месте
+       telegram_bot.py    выбор истории + Publish / Regenerate / Spicier / More KZ / Less satire / Edit / Reject
 analytics/
   tracker.py         метрики + theme-report
 orchestrator.py      дневной цикл
-scheduler.py         scout 3ч / история 09:00 Almaty
+scheduler.py         scout 3ч / newsroom по cron в Asia/Almaty
 ```
 
 ## Быстрый старт
@@ -89,6 +91,8 @@ python orchestrator.py --dry  # весь цикл без публикации
 | `LINKEDIN_ENABLED` | `1` публиковать в LinkedIn, `0` пропускать |
 | `LINKEDIN_ACCESS_TOKEN` + `LINKEDIN_AUTHOR_URN` | реальная публикация |
 | `LINKEDIN_VISIBILITY` | `PUBLIC` или `CONNECTIONS` для поста |
+| `NEWSROOM_INTERVAL_HOURS` | `0` — 09:00 ежедневно; `6` — 09:00, 15:00, 21:00 Asia/Almaty |
+| `CANDIDATE_MAX_AGE_DAYS` | сколько дней история остаётся в редакционном пуле; по умолчанию `3` |
 
 ## Режимы
 
@@ -114,6 +118,8 @@ LINKEDIN_ENABLED=0
 TELEGRAM_CHANNEL_ENABLED=1
 SCOUT_MAX_ITEMS=8
 MODEL_EDITOR=claude-sonnet-5
+NEWSROOM_INTERVAL_HOURS=6  # 09:00, 15:00, 21:00 Asia/Almaty
+CANDIDATE_MAX_AGE_DAYS=3
 ```
 
 Run as an always-on worker:
