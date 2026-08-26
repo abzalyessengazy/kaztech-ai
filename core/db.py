@@ -11,9 +11,9 @@ SQLite-хранилище редакции (newsroom).
 SQLite осознанно (в MVP не нужен тяжёлый infra). Схема Postgres-совместима —
 при росте меняется только connection-слой, не логика агентов.
 """
-import sqlite3
 import re
-from datetime import datetime, timezone
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 from config import settings
@@ -76,6 +76,10 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def candidate_cutoff() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=settings.CANDIDATE_MAX_AGE_DAYS)).isoformat()
+
+
 @contextmanager
 def connect():
     conn = sqlite3.connect(settings.DB_PATH)
@@ -129,9 +133,15 @@ def set_status(news_id: int, status: str):
 
 def get_candidates(limit: int):
     with connect() as conn:
+        # Recency only — no is_local-first bias here. rules_filter already
+        # gives locals a scoring bonus; sorting is_local DESC on top of that
+        # let local candidates crowd out ALL global ones (OpenAI/Anthropic/etc.)
+        # once the local backlog exceeded `limit`.
         rows = conn.execute(
-            "SELECT * FROM news WHERE status='candidate' ORDER BY is_local DESC, fetched_at DESC LIMIT ?",
-            (limit,),
+            """SELECT * FROM news
+               WHERE status='candidate' AND fetched_at >= ?
+               ORDER BY fetched_at DESC LIMIT ?""",
+            (candidate_cutoff(), limit),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -162,13 +172,20 @@ def save_ranking(news_id: int, s: dict):
 
 
 def get_finalists(n: int, min_score: float):
+    """Top-N by score. min_score gates whether TODAY is worth running at all
+    (best story too weak → skip day) — it must NOT filter #2..#N individually,
+    or a day with one 8.2 and four 5-6s would show only 1 option instead of 5."""
     with connect() as conn:
         rows = conn.execute(
-            """SELECT * FROM news WHERE status='ranked' AND editorial >= ?
+                """SELECT * FROM news
+                    WHERE status='ranked' AND fetched_at >= ?
                ORDER BY editorial DESC LIMIT ?""",
-            (min_score, n),
+                (candidate_cutoff(), n),
         ).fetchall()
-        return [dict(r) for r in rows]
+        results = [dict(r) for r in rows]
+        if not results or results[0]["editorial"] < min_score:
+            return []
+        return results
 
 
 def get_news(news_id: int):

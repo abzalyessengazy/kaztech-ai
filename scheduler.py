@@ -6,6 +6,7 @@
 
 Запуск:  python scheduler.py   (держи процесс живым: screen/tmux/systemd)
 """
+import io
 import logging
 import sys
 
@@ -20,7 +21,8 @@ from orchestrator import run_daily
 # block-buffers by default — print()s (including the whole 30-min Telegram
 # approval wait) wouldn't reach live logs until the buffer fills or the
 # process exits. Line-buffer instead so logs stay real-time.
-sys.stdout.reconfigure(line_buffering=True)
+if isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout.reconfigure(line_buffering=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("scheduler")
@@ -52,7 +54,9 @@ def scout_job():
 
 # "interval" trigger anchors to process start time, not wall-clock — it drifts on
 # every restart. Use fixed cron hours (starting at 09:00) so runs stay pinned.
-DAILY_HOURS = sorted({(9 + step) % 24 for step in range(0, 24, settings.NEWSROOM_INTERVAL_HOURS)}) \
+# range() (not modulo) so the schedule doesn't wrap past midnight back to a
+# spurious early-morning run (e.g. 9+6+6+6=27 → wrapped to 03:00 instead of stopping).
+DAILY_HOURS = list(range(9, 24, settings.NEWSROOM_INTERVAL_HOURS)) \
     if settings.NEWSROOM_INTERVAL_HOURS else [9]
 
 

@@ -1,6 +1,7 @@
 import unittest
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 from agents import publisher, rules_filter
 from agents import editor, ranker, telegram_channel
@@ -235,7 +236,7 @@ class TelegramCardTests(unittest.TestCase):
 
 
 class DbTests(unittest.TestCase):
-    def test_get_candidates_prefers_local_items(self):
+    def test_get_candidates_excludes_stale_items(self):
         old_db_path = settings.DB_PATH
         handle = tempfile.NamedTemporaryFile(delete=False)
         handle.close()
@@ -259,12 +260,50 @@ class DbTests(unittest.TestCase):
             for item in db.get_inbox(10):
                 db.set_status(item["id"], "candidate")
 
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE news SET fetched_at=? WHERE source_url=?",
+                    ((datetime.now(timezone.utc) - timedelta(days=4)).isoformat(),
+                     "https://example.com/global"),
+                )
+
             candidates = db.get_candidates(1)
         finally:
             settings.DB_PATH = old_db_path
             os.unlink(handle.name)
 
         self.assertEqual(candidates[0]["source_url"], "https://example.com/local")
+
+    def test_get_finalists_uses_threshold_to_gate_the_day_not_each_option(self):
+        old_db_path = settings.DB_PATH
+        handle = tempfile.NamedTemporaryFile(delete=False)
+        handle.close()
+        settings.DB_PATH = handle.name
+        try:
+            db.init_db()
+            for index, editorial in enumerate((8.0, 5.5)):
+                db.add_news({
+                    "source_url": f"https://example.com/finalist-{index}",
+                    "original_title": f"Story {index}",
+                    "source_name": "Example",
+                })
+            for item, editorial in zip(db.get_inbox(10), (8.0, 5.5)):
+                db.save_ranking(item["id"], {
+                    "importance": editorial,
+                    "novelty": editorial,
+                    "kz_relevance": editorial,
+                    "ai_relevance": editorial,
+                    "virality": editorial,
+                    "satire_potential": editorial,
+                    "editorial": editorial,
+                })
+
+            finalists = db.get_finalists(5, 6.5)
+        finally:
+            settings.DB_PATH = old_db_path
+            os.unlink(handle.name)
+
+        self.assertEqual([story["editorial"] for story in finalists], [8.0, 5.5])
 
     def test_used_news_includes_chosen_rejected_and_published(self):
         old_db_path = settings.DB_PATH

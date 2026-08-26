@@ -26,6 +26,9 @@ GLOBAL_SOURCES = [
     {"type": "hn", "name": "Hacker News", "url": "https://hn.algolia.com/api/v1/search?tags=front_page", "weight": 1.0, "is_local": 0},
     {"type": "rss", "name": "MIT Tech Review AI", "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed", "weight": 0.9, "is_local": 0},
     {"type": "rss", "name": "Product Hunt", "url": "https://www.producthunt.com/feed", "weight": 0.8, "is_local": 0},
+    # Anthropic publishes no official RSS feed — Google News search RSS is the
+    # reliable proxy so Anthropic/Claude news actually reaches the inbox.
+    {"type": "rss", "name": "Anthropic (Google News)", "url": "https://news.google.com/rss/search?q=Anthropic+Claude+when:2d&hl=en-US&gl=US&ceid=US:en", "weight": 1.4, "is_local": 0},
 ]
 
 # ⚠️ URL феодов ниже — предположения. Проверь и поправь под реальные RSS.

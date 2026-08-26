@@ -14,12 +14,22 @@ Publish/Regenerate/Edit/Reject циклінен өтеді. Reject болса �
 
 Флаги: --auto (без аппрува, ең жоғары score автоматты), --dry (ничего не публикует).
 """
+import io
 import sys
 
 from config import settings
 from core import db
 from agents import scout, rules_filter, ranker, editor, visual, publisher, telegram_channel
 from approval import telegram_bot
+
+
+def _release_untried(finalists: list[dict], tried_ids: list[int]):
+    """Un-chosen finalists must not get stuck in 'finalist' forever (get_finalists()
+    only looks at status='ranked') — send them back to the candidate pool so a
+    genuinely good story from a quiet day can resurface tomorrow instead of vanishing."""
+    for f in finalists:
+        if f["id"] not in tried_ids:
+            db.set_status(f["id"], "candidate")
 
 
 def run_daily(auto_publish: bool = False):
@@ -41,6 +51,9 @@ def run_daily(auto_publish: bool = False):
     else:
         story = telegram_bot.choose_story(finalists)   # 4. главред таңдайды
         if not story:
+            # Skip/timeout — таңдалмаған финалисттер жоғалмасын, ертең қайта
+            # кандидат ретінде оралсын (бұрын 'finalist' күйінде мәңгі қалып қоятын).
+            _release_untried(finalists, [])
             print("[orchestrator] главред таңдамады — бүгін өткіздік.")
             return
     db.set_status(story["id"], "chosen")
@@ -68,6 +81,7 @@ def run_daily(auto_publish: bool = False):
         if result == "timeout":
             # Молчание — вердикт емес: reject деп есептемей, цикл осында тоқтайды.
             db.set_status(story["id"], "timeout")
+            _release_untried(finalists, tried_ids)
             break
 
         # Нақты Reject — қалған финалисттерден главред қайта таңдайды.
@@ -81,6 +95,8 @@ def run_daily(auto_publish: bool = False):
             db.set_status(story["id"], "chosen")
             print(f"[orchestrator] жаңа тарих таңдалды: {story['original_title'][:60]}")
         else:
+            # Skip/timeout — қалған финалисттер де жоғалмасын, ертең қайта кандидат болсын.
+            _release_untried(remaining, [])
             print("[orchestrator] жаңа тарих таңдалмады — бүгін өткіздік.")
 
     print("[orchestrator] цикл завершён.")
@@ -90,7 +106,8 @@ if __name__ == "__main__":
     # stdout to a pipe/file is block-buffered by default — prints (including
     # the whole 30-min Telegram approval wait) wouldn't show up in logs
     # until the buffer fills or the process exits. Line-buffer instead.
-    sys.stdout.reconfigure(line_buffering=True)
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
     if "--dry" in sys.argv:
         settings.DRY_RUN = True
     run_daily(auto_publish="--auto" in sys.argv)

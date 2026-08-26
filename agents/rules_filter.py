@@ -98,13 +98,24 @@ def run() -> dict:
         kept.append({"item": item, "tokens": tokens,
                      "score": _cheap_score(item, local), "local": local})
 
-    # Топ-N кандидатов, локальные — вперёд.
-    kept.sort(key=lambda k: (k["local"], k["score"]), reverse=True)
-    promoted = kept[:MAX_CANDIDATES]
+    # Квота, не просто топ-N по score: локальный бонус (+1.5 в _cheap_score) сам
+    # по себе перевешивает разницу весов источников, поэтому даже без жёсткой
+    # сортировки (local, score) локальные новости — если их много — заполняли
+    # ВСЕ 20 мест, и OpenAI/Anthropic/DeepMind и т.п. не попадали вообще.
+    # Резервируем половину слотов под global-новости гарантированно.
+    local_pool = sorted((k for k in kept if k["local"]), key=lambda k: k["score"], reverse=True)
+    global_pool = sorted((k for k in kept if not k["local"]), key=lambda k: k["score"], reverse=True)
+    half = MAX_CANDIDATES // 2
+    promoted = local_pool[:half] + global_pool[:half]
+    leftover = sorted(local_pool[half:] + global_pool[half:], key=lambda k: k["score"], reverse=True)
+    promoted += leftover[:MAX_CANDIDATES - len(promoted)]
+
+    promoted_ids = {id(k) for k in promoted}
     for k in promoted:
         db.set_status(k["item"]["id"], "candidate")
-    for k in kept[MAX_CANDIDATES:]:
-        db.set_status(k["item"]["id"], "dropped")
+    for k in kept:
+        if id(k) not in promoted_ids:
+            db.set_status(k["item"]["id"], "dropped")
 
     n_local = sum(1 for k in promoted if k["local"])
     print(f"[filter] инбокс {len(inbox)} → кандидатов {len(promoted)} "
